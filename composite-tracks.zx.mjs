@@ -226,7 +226,7 @@ for (let segIdx = 0; segIdx < numSegments; segIdx++) {
   const numFrames =
     segIdx < numSegments - 1
       ? framesPerSegment
-      : totalDuration_frames % numSegments;
+      : totalDuration_frames - segIdx * framesPerSegment;
 
   const segTmpDir = path.resolve(tmpPath, `seg${segIdx}`);
   fs.emptyDirSync(segTmpDir);
@@ -475,6 +475,14 @@ async function renderSegment(segIdx, startFrame, numFrames, segTmpDir) {
         `Internal inconsistency: no track for inputId ${inputId}`
       );
     }
+
+    // Skip this input if we're seeking past its duration
+    const seekTimeSecs = startFrame / fps;
+    if (t.durationInSecs && seekTimeSecs >= t.durationInSecs) {
+      echo`Skipping input ${inputId} for segment - seek ${seekTimeSecs}s exceeds video duration ${t.durationInSecs}s`;
+      continue;
+    }
+
     echo`Should slice from ${srcVideoFile} - -ss ${startFrame / fps} -t ${
       numFrames / fps
     }`;
@@ -509,14 +517,20 @@ async function renderSegment(segIdx, startFrame, numFrames, segTmpDir) {
     if (minFramesInSeq !== numFrames) {
       if (minFramesInSeq <= 1) {
         // if there's only one frame written for a sequence, that indicates a problem in ffmpeg.
-        // don't even try to render
-        echo`Warning: segment ${segIdx} rendered inputs: got ${minFramesInSeq} frames vs expected ${numFrames}, can't render`;
-        return '';
-      }
-      echo`Warning: segment ${segIdx} rendered inputs duration differs: got min ${minFramesInSeq} vs expected ${numFrames}`;
-      vcsRenderInputTimings.durationInFrames = minFramesInSeq;
-      for (const ev of vcsRenderInputTimings.playbackEvents) {
-        ev.durationInFrames = minFramesInSeq;
+        // Remove the problematic inputs and render without them
+        echo`Warning: segment ${segIdx} rendered inputs: got ${minFramesInSeq} frames vs expected ${numFrames}, removing problematic inputs`;
+        vcsRenderInputTimings.playbackEvents = [];
+        // Clean up the sequence directories since we won't use them
+        for (const seqDir of seqDirs) {
+          fs.emptyDirSync(seqDir);
+        }
+        seqDirs.length = 0;
+      } else {
+        echo`Warning: segment ${segIdx} rendered inputs duration differs: got min ${minFramesInSeq} vs expected ${numFrames}`;
+        vcsRenderInputTimings.durationInFrames = minFramesInSeq;
+        for (const ev of vcsRenderInputTimings.playbackEvents) {
+          ev.durationInFrames = minFramesInSeq;
+        }
       }
     }
   }

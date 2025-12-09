@@ -22,27 +22,52 @@ export function writeVcsBatchForTracks(
     params: { ...initialParams },
   };
 
+  // Build maps for both start and end frames
   const videoTrackIndexesByStartFrame = new Map();
+  const videoTrackIndexesByEndFrame = new Map();
 
   for (const [idx, track] of vcsVideoInputTrackDescs.entries()) {
-    const { startOffsetSecs = 0 } = track;
+    const { startOffsetSecs = 0, durationInSecs = 0 } = track;
     const startFrame = Math.round(startOffsetSecs * fps);
 
     const arr = videoTrackIndexesByStartFrame.get(startFrame) ?? [];
     arr.push(idx);
     videoTrackIndexesByStartFrame.set(startFrame, arr);
+
+    // Calculate end frame if duration is available
+    if (durationInSecs > 0) {
+      const endFrame = Math.round((startOffsetSecs + durationInSecs) * fps);
+      const endArr = videoTrackIndexesByEndFrame.get(endFrame) ?? [];
+      endArr.push(idx);
+      videoTrackIndexesByEndFrame.set(endFrame, endArr);
+    }
   }
 
-  const sortedStartFrames = [...videoTrackIndexesByStartFrame.keys()].sort(
-    (a, b) => a - b
-  );
+  // Collect all frames where something changes (start or end)
+  const allChangeFrames = new Set([
+    ...videoTrackIndexesByStartFrame.keys(),
+    ...videoTrackIndexesByEndFrame.keys(),
+  ]);
+  const sortedChangeFrames = [...allChangeFrames].sort((a, b) => a - b);
 
-  for (const frameIdx of sortedStartFrames) {
-    const tracksStartingHere = videoTrackIndexesByStartFrame.get(frameIdx);
+  for (const frameIdx of sortedChangeFrames) {
+    const tracksStartingHere = videoTrackIndexesByStartFrame.get(frameIdx) ?? [];
+    const tracksEndingHere = videoTrackIndexesByEndFrame.get(frameIdx) ?? [];
+
+    // Skip if nothing changes at this frame
+    if (tracksStartingHere.length === 0 && tracksEndingHere.length === 0) {
+      continue;
+    }
+
     const batchEv = vcsBatch.eventsByFrame[frameIdx] ?? {};
-
     activeVideoInputSlots = [...activeVideoInputSlots];
 
+    // First remove tracks that are ending
+    for (const trackIdx of tracksEndingHere) {
+      activeVideoInputSlots[trackIdx] = null;
+    }
+
+    // Then add tracks that are starting
     for (const trackIdx of tracksStartingHere) {
       const t = vcsVideoInputTrackDescs[trackIdx];
       activeVideoInputSlots[trackIdx] = {
